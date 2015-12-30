@@ -1,0 +1,187 @@
+import urllib2
+import re
+import HTMLParser
+import cPickle
+
+from bs4 import BeautifulSoup  # latest version bs4
+
+
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+
+class PaperData:
+    author = ''
+    paper = ''
+    universities = ''
+    webAddress = ''
+    parentId = ''
+    linkToChildNodes = ''
+
+    def __init__(self, universities, webAddress, parentId, author, paper, linkToChildNodes):
+        self.universities = universities
+        self.paper = paper
+        self.webAddress = webAddress
+        if parentId == None:
+            self.parentId = None
+        else:
+            self.parentId = parentId
+        self.author = author
+        self.linkToChildNodes = linkToChildNodes
+
+    def getLinkToChildNodes(self):
+        return self.linkToChildNodes
+
+    def getAuthor(self):
+        return self.author
+
+    def getPaper(self):
+        return self.paper
+
+    def getUniversities(self):
+        return self.universities
+
+    def getAddress(self):
+        return self.webAddress
+
+    def __str__(self):
+        final_string = "---------PAGE------------\n"
+        final_string += "Paper Name: " + self.paper + "\n"
+        final_string += "Paper Authors:" + ', '.join(self.author) + "\n"
+        final_string += "Research Location: " + ', '.join(self.universities) + "\n"
+        final_string += "WebOfScience Location: " + self.webAddress + "\n"
+        final_string += "Link To Child Nodes: " + self.linkToChildNodes + "\n"
+        if self.parentId != None:
+            final_string += "Parent Node Identification: " + str(self.parentId) + "\n"
+        else:
+            final_string += "Parent Node Identification: Root Node\n"
+        final_string += "----------END-------------\n"
+        return final_string
+
+
+def recievePageData(URL):
+    return BeautifulSoup(urllib2.urlopen(URL).read())
+
+
+def findAuthor(page):
+    # Authors Capture
+    authors_paragraph = page.find_all("p", {"class", "FR_field"})
+    authors_list = []
+    for a in authors_paragraph:
+        author_paragraph_check = False
+        for b in a.find_all("span", {"class", "FR_label"}):
+            if b.text == "By:":
+                author_paragraph_check = True
+        if author_paragraph_check == True:
+            for author_names in a.find_all("a"):
+                authors_list.append(author_names.text)
+    list_of_indexes = []
+    current1 = 0
+    for a in authors_list:
+        if str(a).isdigit() or str(a) == "...More" or str(a) == "...Less":
+            list_of_indexes.append(current1)
+        current1 += 1
+    current = 0
+    for a in list_of_indexes:
+        authors_list.pop(a - current)
+        current += 1
+    return authors_list
+
+
+def findUniversities(page):
+    thing = page.find_all("td", {"class", "fr_address_row2"})
+    # web address URL Capture
+    possibleUniversities = []
+    caughtUniversity = False
+    # universities capture
+    for universities in thing:
+        preferred = universities.find_all('preferred_org')
+        for a in preferred:
+            if a.text not in possibleUniversities:
+                possibleUniversities.append(a.text)
+            caughtUniversity = True
+        if (caughtUniversity == False):
+            for a in universities.find_all('a'):
+                if a.text not in possibleUniversities:
+                    possibleUniversities.append(a.text)
+                caughtUniversity = True
+    if (caughtUniversity == False):
+        for a in page.find_all('p', {'class', "FR_field"}):
+            for b in a.find_all('a'):
+                if (b.text[0] == '['):
+                    caughtUniversity = True
+                    if b.text not in possibleUniversities:
+                        possibleUniversities.append(b.text)
+    for a in possibleUniversities:
+        if a[0] == '[':
+            my_regular_expression = re.compile("\[\s\d\s\]\s([A-Za-z0-9\s\.]+)")
+            my_search = re.search(my_regular_expression, a)
+            possibleUniversities[possibleUniversities.index(a)] = my_search.group(1)
+    return possibleUniversities
+
+
+def compilePapers(parent, page):
+    h = HTMLParser.HTMLParser()
+    listOfPapers = []
+    for link in page.find_all("div", {"class": "search-results-item"}):
+        print "compiling...",
+        citeLink = "NO CITATIONS"
+        for a in link.find_all("div", {"class": "search-results-data-cite"}):
+            for b in a.find_all("a"):
+                citeLink = h.unescape("http://apps.webofknowledge.com/" + b['href'])
+        for a in link.find_all("a", {"class", "smallV110"}):
+            pattern = re.compile('href=\"(.+)\"')
+            actual_URL = re.search(pattern, str(a))
+            webAddress = h.unescape("http://apps.webofknowledge.com" + actual_URL.group(1))
+            soup2 = recievePageData(webAddress)
+            authors = findAuthor(soup2)
+            universities = findUniversities(soup2)
+            URL = webAddress
+            paperName = re.search(re.compile("(.+)"), a.text).group(1)
+            listOfPapers.append(PaperData(universities, URL, parent, authors, paperName, citeLink))
+            print bcolors.OKGREEN + "COMPLETE" + bcolors.ENDC
+    return listOfPapers
+
+
+def exportToPickle(list, fileName):
+    file1 = open(fileName, "wb")
+    cPickle.dump(list, file1, cPickle.HIGHEST_PROTOCOL)
+    file1.close()
+
+# file=open("/Users/aidancurtis/Desktop/crawler", 'wb')
+s = "http://apps.webofknowledge.com/summary.do?product=UA&parentProduct=UA&search_mode=GeneralSearch&qid=1&SID=3CsGNexXmo5wBIN5xbl&page=1&action=changePageSize&pageSize=50"
+h = HTMLParser.HTMLParser()
+current = 2
+extract_text = re.compile("(.+)")
+# while True:
+finished_string = h.unescape(s)
+listOfPaperData = compilePapers(None, recievePageData(finished_string))
+print "finished initial compilation..."
+print "starting secondary node compilation"
+file1 = open("WebOfScienceDataPrimary.pkl", "wb")
+listofA = []
+listofB = []
+for a in listOfPaperData:
+    listofA.append(a)
+    print bcolors.OKBLUE + str(a) + bcolors.ENDC
+    listOfSubPaperData = compilePapers(id(a), recievePageData(a.getLinkToChildNodes()))
+    for b in listOfSubPaperData:
+        print b
+        listofB.append(b)
+
+exportToPickle(listofA, "RootNodes.pkl")
+exportToPickle(listofB, "SubNodes.pkl")
+
+
+# thing=soup.find_all("form", {"id": "summary_navigation"})
+
+# s=search.group(1)+str(current)+"&action=changePageSize&pageSize=50"
+# current+=1
+# file.close()
